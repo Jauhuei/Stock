@@ -1,0 +1,160 @@
+﻿@page "/"
+@using AntDesign.Charts;
+@using Newtonsoft.Json.Linq;
+@using Microsoft.JSInterop;
+@using Stock.Data;
+@using AntDesign;
+@inject IJSRuntime JSRuntime;
+
+<PageTitle>股票回测(发布测试)</PageTitle>
+
+<h1>股票回测</h1>
+
+<p>股票代码 <input value="@Code" onkeydown="@CodeKeydownAsync" oninput="@CodeInputAsync" /></p>
+
+<h2>日 K</h2>
+<Stock Config="@KLineConfig" @ref="@KLineStock" />
+<h2>收益率(%)</h2>
+<Line Config="@AssetConfig" @ref="@AssetLine" />
+<h2>交易统计</h2>
+@if (Assets != null)
+{
+    <p>@($"最终收益：{Assets.Last()}")</p>
+    <p>@($"最大收益：{Assets.MaxBy(asset => asset.TotalAsset)}")</p>
+    <p>@($"最小收益：{Assets.MinBy(asset => asset.TotalAsset)}")</p>
+    <p>@($"最大持股：{Assets.MaxBy(asset => asset.SharesHeld)}")</p>
+    <p>@($"交易次数：卖 {Assets.Sum(asset => asset.TradeInfos.Count(trade => trade.Contains("卖成")))} /买 {Assets.Sum(asset => asset.TradeInfos.Count(trade => trade.Contains("买成")))} 次")</p>
+}
+<h2>交易细节</h2>
+@if (Assets != null)
+{
+    <p>收益对比(%)：以 @(Assets.First().Date) 为基准日。自基准日的获利百分比 - 股价收盘涨跌百分比</p>
+    <Table TItem="Asset" DataSource="@(Assets.OrderByDescending(Asset=>Asset.Date))" PageSize="100">
+        <PropertyColumn Title="日期" Property="asset=>asset!.Date" />
+        <PropertyColumn Title="总资产" Property="asset=>asset!.TotalAsset" />
+        <PropertyColumn Title="现金" Property="asset=>asset!.Cash" />
+        <PropertyColumn Title="持股数" Property="asset=>asset!.SharesHeld" />
+        <PropertyColumn Title="今开/收/高/低" Property='asset=>$"{asset!.StockInfo.Open}/ {asset!.StockInfo.Close}/ {asset!.StockInfo.High}/ {asset!.StockInfo.Low}"' />
+        <PropertyColumn Title="收益对比(%)" Property="asset=>asset!.IncomeComparison" />
+        <PropertyColumn Title="成交细节" Property="asset=>asset">
+            @{
+                foreach (var info in context.TradeInfos)
+                {
+                    <p>@info</p>
+                }
+            }
+        </PropertyColumn>
+    </Table>
+}
+
+
+@code {
+
+    public string Code { get; set; } = "601868";
+
+    public List<StockInfo>? StockInfos { get; set; }
+
+    public Stock KLineStock { get; set; } = new Stock();
+
+    public StockConfig KLineConfig { get; } = new StockConfig
+        {
+            Padding = "auto",
+            XField = "date",
+            YField = new string[] { "open", "close", "high", "low" },
+            Meta = new
+            {
+                close = new
+                {
+                    Alias = "收盘价",
+                },
+                open = new
+                {
+                    Alias = "开盘价",
+                },
+                high = new
+                {
+                    Alias = "最高价",
+                },
+                low = new
+                {
+                    Alias = "最低价",
+                },
+                volume = new
+                {
+                    Alias = "成交量",
+                }
+            },
+            Tooltip = new AntDesign.Charts.Tooltip
+            {
+                Fields = new string[] { "open", "close", "high", "low", "volume" }
+            }
+        };
+
+    public List<Asset>? Assets { get; set; }
+
+    public Line AssetLine { get; set; } = new Line();
+
+    public LineConfig AssetConfig { get; } = new LineConfig
+        {
+            Padding = "auto",
+            XField = "date",
+            YField = "income",
+            Meta = new
+            {
+                income = new
+                {
+                    Alias = "收益率(%)",
+                },
+
+                totalAsset = new
+                {
+                    Alias = "总资产",
+                },
+
+                cashRate = new
+                {
+                    Alias = "现金占比(%)",
+                },
+
+                sharesHeld = new
+                {
+                    Alias = "持股数",
+                },
+            },
+            Tooltip = new AntDesign.Charts.Tooltip
+            {
+                Fields = new string[] { "income", "totalAsset", "cashRate", "sharesHeld" }
+            }
+        };
+
+    protected async override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await ExecuteCodeAsync();
+    }
+
+    private async Task CodeKeydownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ExecuteCodeAsync();
+    }
+
+    private void CodeInputAsync(ChangeEventArgs e)
+    {
+        Code = e.Value?.ToString() ?? "";
+    }
+
+    private async Task ExecuteCodeAsync()
+    {
+        try
+        {
+            StockInfos = await StockInfo.GetAsync(Code, DateTime.Today.AddYears(-1), DateTime.Now);
+            Assets = Asset.Backtest(100000, StockInfos);
+            await KLineStock.ChangeData(StockInfos.ToArray());
+            await AssetLine.ChangeData(Assets.ToArray());
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("alert", $"发生错误：{ex.Message}");
+        }
+    }
+}
